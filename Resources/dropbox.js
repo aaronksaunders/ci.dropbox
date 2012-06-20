@@ -1,8 +1,41 @@
+// 
+// based off of code from https://github.com/sintaxi/node-dbox
 //
-// https://github.com/sintaxi/node-dbox
-//
-var oauth = require("./lib/oauth")
+/**
+ * OAUTH CLIENT CODE
+ */
+var oauth = function(consumerKey, consumerSecret) {
 
+	var encode = function(data) {
+		return encodeURIComponent(data || "").replace(/\!/g, "%21").replace(/\'/g, "%27").replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\*/g, "%2A")
+	}
+	var getSignature = function(tokenSecret) {
+		return encode(consumerSecret) + "&" + encode(tokenSecret)
+	}
+	var getTimestamp = function() {
+		return (Math.floor((new Date()).getTime() / 1000)).toString()
+	}
+	var getNonce = function(timestamp) {
+		return timestamp + Math.floor(Math.random() * 100000000)
+	}
+
+	return function(options) {
+		var options = JSON.parse(JSON.stringify(options))
+		var secret = options["oauth_token_secret"]
+		var signature = getSignature(secret)
+		var timestamp = getTimestamp()
+		var nonce = getNonce(timestamp)
+
+		options["oauth_consumer_key"] = consumerKey, options["oauth_signature"] = signature, options["oauth_timestamp"] = timestamp, options["oauth_nonce"] = nonce, options["oauth_signature_method"] = "PLAINTEXT", options["oauth_version"] = "1.0"
+		delete options["oauth_token_secret"]
+		delete options["uid"]
+
+		return options
+	}
+}
+/**
+ * DROPBOX CLIENT CODE
+ */
 exports.createClient = function(config) {
 
 	var sign = oauth(config.app_key, config.app_secret)
@@ -23,6 +56,9 @@ exports.createClient = function(config) {
 		return obj;
 	};
 
+	/**
+	 * load the saved access token from the properties file
+	 */
 	var loadAccessToken = function() {
 		var token, that = this;
 
@@ -87,7 +123,7 @@ exports.createClient = function(config) {
 
 			client.send(args.body);
 		} else {
-			client.send(JSON.parse(args.body));
+			client.send(args.body ? JSON.parse(args.body) : {});
 		}
 	}
 
@@ -240,6 +276,93 @@ exports.createClient = function(config) {
 				cb(r.status, JSON.parse(b))
 			})
 		},
+		delta : function(options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded"
+				},
+				"url" : "https://api.dropbox.com/1/delta",
+				"body" : JSON.stringify(params)
+			}
+			request(args, function(e, r, b) {
+				cb(r.status, JSON.parse(b))
+			})
+		},
+
+		get : function(path, options, cb) {
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var urlX = "";
+			for(var a in params) {
+				urlX += Titanium.Network.encodeURIComponent(a) + '=' + Titanium.Network.encodeURIComponent(params[a]) + '&';
+			}
+			var args = {
+				"method" : "GET",
+				"url" : "https://api-content.dropbox.com/1/files/" + (params.root || root) + "/" + escape(path) + "?" + urlX,
+				"encoding" : null
+			}
+			return request(args, function(e, r, b) {
+				cb(r.statusCode, b, r.getResponseHeaders()['x-dropbox-metadata'])
+			})
+		},
+
+		metadata : function(path, options, cb) {
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var urlX = "";
+			for(var a in params) {
+				urlX += Titanium.Network.encodeURIComponent(a) + '=' + Titanium.Network.encodeURIComponent(params[a]) + '&';
+			}
+			var args = {
+				"method" : "GET",
+				"url" : "https://api.dropbox.com/1/metadata/" + (params.root || root) + "/" + escape(path) + "?" + urlX,
+				"encoding" : null
+			}
+			return request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, r.statusCode == 304 ? {} : JSON.parse(b))
+			})
+		},
+
+		revisions : function(path, options, cb) {
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var urlX = "";
+			for(var a in params) {
+				urlX += Titanium.Network.encodeURIComponent(a) + '=' + Titanium.Network.encodeURIComponent(params[a]) + '&';
+			}
+			var args = {
+				"method" : "GET",
+				"url" : "https://api.dropbox.com/1/revisions/" + (params.root || root) + "/" + escape(path) + "?" + urlX,
+				"encoding" : null
+			}
+			return request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
 
 		put : function(path, body, options, cb) {
 
@@ -264,7 +387,7 @@ exports.createClient = function(config) {
 				"body" : body
 			}
 			request(args, function(e, r, b) {
-				cb(r.status, JSON.parse(b))
+				cb( e ? null : r.status, JSON.parse(b))
 			})
 		},
 
@@ -291,6 +414,185 @@ exports.createClient = function(config) {
 			}
 			request(args, function(e, r, b) {
 				cb(r.status, JSON.parse(b))
+			})
+		},
+		shares : function(path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/shares/" + (params.root || root) + "/" + escape(path),
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
+		media : function(path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/media/" + (params.root || root) + "/" + escape(path),
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
+
+		thumbnails : function(path, options, cb) {
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+			var urlX = "";
+			for(var a in params) {
+				urlX += Titanium.Network.encodeURIComponent(a) + '=' + Titanium.Network.encodeURIComponent(params[a]) + '&';
+			}
+			var args = {
+				"method" : "GET",
+				"url" : "https://api-content.dropbox.com/1/thumbnails/" + (params.root || root) + "/" + escape(path) + "?" + urlX,
+				"encoding" : null
+			}
+			return request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, b, r.getResponseHeaders()['x-dropbox-metadata'])
+			})
+		},
+		cp : function(from_path, to_path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+
+			params["root"] = params.root || root;
+			params["from_path"] = from_path;
+			params["to_path"] = to_path;
+
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/fileops/copy",
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
+		mv : function(from_path, to_path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+
+			params["root"] = params.root || root;
+			params["from_path"] = from_path;
+			params["to_path"] = to_path;
+
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/fileops/move",
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
+
+		rm : function(path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+
+			params["root"] = params.root || root;
+			params["path"] = path;
+
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/fileops/delete",
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
+			})
+		},
+		mkdir : function(path, options, cb) {
+
+			// ensure we have the tokens
+			options = extend(options, {
+				oauth_token : this.accessToken,
+				oauth_token_secret : this.accessTokenSecret
+			});
+
+			var params = sign(options)
+
+			params["root"] = params.root || root;
+			params["path"] = path;
+
+			var body = JSON.stringify(params)
+			var args = {
+				"method" : "POST",
+				"headers" : {
+					"content-type" : "application/x-www-form-urlencoded",
+					"content-length" : body.length
+				},
+				"url" : "https://api.dropbox.com/1/fileops/create_folder",
+				"body" : body
+			}
+			request(args, function(e, r, b) {
+				cb( e ? null : r.statusCode, JSON.parse(b))
 			})
 		},
 	}
